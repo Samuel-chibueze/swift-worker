@@ -47,11 +47,20 @@ func New(ctx context.Context, opts ...Option) *App {
     return app
 }
 
-func (a *App) Worker(name string, handler Handler, opts ...WorkerOption) *Worker {
+func (a *App) Worker(name string, handler interface{}, opts ...WorkerOption) *Worker {
     a.mu.Lock()
     defer a.mu.Unlock()
 
-    w := newWorker(name, handler, a)
+    // Wrap the handler if it's not already a Handler type
+    var h Handler
+    switch v := handler.(type) {
+    case Handler:
+        h = v
+    default:
+        h = WrapHandler(v)
+    }
+
+    w := newWorker(name, h, a)
     w.applyOptions(opts...)
     a.workers[name] = w
     return w
