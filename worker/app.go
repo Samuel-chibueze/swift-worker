@@ -17,17 +17,16 @@ type App struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	workers         map[string]*Worker
-	backend         Backend
+	Backend         Backend // EXPORTED - now accessible
 	backendURL      string
 	scheduler       *scheduler.Scheduler
 	started         bool
 	stopped         bool
 	wg              sync.WaitGroup
 	shutdownTimeout time.Duration
-	jobsCh          chan Job
+	jobsCh          chan interface{}
 }
 
-// New defaults to Memory backend for easy testing
 func New(ctx context.Context, opts ...Option) *App {
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -35,9 +34,9 @@ func New(ctx context.Context, opts ...Option) *App {
 		ctx:             ctx,
 		cancel:          cancel,
 		workers:         make(map[string]*Worker),
-		jobsCh:          make(chan Job, 100),
+		jobsCh:          make(chan interface{}, 100),
 		shutdownTimeout: 30 * time.Second,
-		backend:         memory.New(ctx),
+		Backend:         memory.New(ctx),
 	}
 
 	for _, opt := range opts {
@@ -84,14 +83,14 @@ func (a *App) Start() error {
 		if err != nil {
 			return fmt.Errorf("init rabbitmq: %w", err)
 		}
-		a.backend = backend
+		a.Backend = backend
 	}
 
-	if a.backend == nil {
+	if a.Backend == nil {
 		return ErrNoBackend
 	}
 
-	if err := a.backend.Start(a.ctx, a.jobsCh); err != nil {
+	if err := a.Backend.Start(a.ctx, a.jobsCh); err != nil {
 		return fmt.Errorf("start backend: %w", err)
 	}
 
@@ -134,8 +133,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 		a.scheduler.Stop()
 	}
 
-	if a.backend != nil {
-		if err := a.backend.Close(); err != nil {
+	if a.Backend != nil {
+		if err := a.Backend.Close(); err != nil {
 			return fmt.Errorf("close backend: %w", err)
 		}
 	}
@@ -165,8 +164,8 @@ func (a *App) Close() error {
 
 	a.cancel()
 
-	if a.backend != nil {
-		return a.backend.Close()
+	if a.Backend != nil {
+		return a.Backend.Close()
 	}
 
 	return nil
@@ -183,9 +182,38 @@ func (a *App) poolLoop() {
 		case <-a.ctx.Done():
 			return
 
-		case job, ok := <-a.jobsCh:
+		case jobInterface, ok := <-a.jobsCh:
 			if !ok {
 				return
+			}
+
+			// Convert interface{} to Job
+			var job Job
+			switch v := jobInterface.(type) {
+			case Job:
+				job = v
+			case memory.Job:
+				job = Job{
+					ID:        v.ID,
+					Worker:    v.Worker,
+					Args:      v.Args,
+					CreatedAt: v.CreatedAt,
+				}
+			case rabbitmq.Job:
+				job = Job{
+					ID:        v.ID,
+					Worker:    v.Worker,
+					Args:      v.Args,
+					CreatedAt: v.CreatedAt,
+				}
+			default:
+				data, err := json.Marshal(jobInterface)
+				if err != nil {
+					continue
+				}
+				if err := json.Unmarshal(data, &job); err != nil {
+					continue
+				}
 			}
 
 			a.mu.RLock()
@@ -206,7 +234,7 @@ func (a *App) poolLoop() {
 			current := active[job.Worker]
 			if current >= concurrency {
 				mu.Unlock()
-				a.jobsCh <- job
+				a.jobsCh <- jobInterface
 				continue
 			}
 			active[job.Worker] = current + 1
@@ -221,7 +249,7 @@ func (a *App) poolLoop() {
 					a.wg.Done()
 				}()
 
-				ctx, cancel := context.WithTimeout(a.ctx, timeout)
+				_, cancel := context.WithTimeout(a.ctx, timeout)
 				defer cancel()
 
 				defer func() {
@@ -232,7 +260,7 @@ func (a *App) poolLoop() {
 
 				var args []any
 				if err := json.Unmarshal(job.Args, &args); err != nil {
-					_ = handler(job.Args)
+					_ = handler()
 					return
 				}
 

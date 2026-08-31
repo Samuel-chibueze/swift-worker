@@ -19,8 +19,8 @@ func main() {
 
 	cleanup := app.Worker(
 		"cleanup",
-		func(name string) error {
-			fmt.Printf("[%s] cleaning up: %s\n", time.Now().Format(time.RFC3339), name)
+		func(args ...any) error {
+			fmt.Printf("[%s] cleaning up: %v\n", time.Now().Format(time.RFC3339), args)
 			return nil
 		},
 		worker.WithConcurrency(1),

@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"fmt"
 	"runtime/debug"
 	"time"
@@ -20,18 +19,36 @@ func Chain(middleware ...Middleware) Middleware {
 	}
 }
 
+// Logging middleware - wraps handler with logging
 func Logging(logger func(msg string, args ...any)) Middleware {
 	return func(next worker.Handler) worker.Handler {
-		return func(ctx context.Context, job worker.Job) error {
+		return func(args ...any) error {
 			start := time.Now()
-			err := next(ctx, job)
+
+			// Extract job info if available
+			var jobID, workerName string
+			if len(args) > 0 {
+				// Try to get job info from args
+				if job, ok := args[0].(interface{ GetID() string }); ok {
+					jobID = job.GetID()
+				}
+			}
+
+			err := next(args...)
 			duration := time.Since(start)
 
 			if logger != nil {
 				if err != nil {
-					logger("job failed", "id", job.ID, "worker", job.Worker, "duration", duration, "error", err)
+					logger("job failed",
+						"job_id", jobID,
+						"worker", workerName,
+						"duration", duration,
+						"error", err)
 				} else {
-					logger("job completed", "id", job.ID, "worker", job.Worker, "duration", duration)
+					logger("job completed",
+						"job_id", jobID,
+						"worker", workerName,
+						"duration", duration)
 				}
 			}
 
@@ -40,15 +57,35 @@ func Logging(logger func(msg string, args ...any)) Middleware {
 	}
 }
 
+// Recovery middleware - recovers from panics
 func Recovery() Middleware {
 	return func(next worker.Handler) worker.Handler {
-		return func(ctx context.Context, job worker.Job) (err error) {
+		return func(args ...any) (err error) {
 			defer func() {
 				if r := recover(); r != nil {
 					err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
 				}
 			}()
-			return next(ctx, job)
+			return next(args...)
+		}
+	}
+}
+
+// Timeout middleware - adds timeout to handler execution
+func Timeout(timeout time.Duration) Middleware {
+	return func(next worker.Handler) worker.Handler {
+		return func(args ...any) error {
+			done := make(chan error, 1)
+			go func() {
+				done <- next(args...)
+			}()
+
+			select {
+			case err := <-done:
+				return err
+			case <-time.After(timeout):
+				return fmt.Errorf("timeout after %v", timeout)
+			}
 		}
 	}
 }

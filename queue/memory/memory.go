@@ -2,15 +2,22 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
-
-	"github.com/Samuel-chibueze/swift-worker/worker"
+	"time"
 )
+
+type Job struct {
+	ID        string          `json:"id"`
+	Worker    string          `json:"worker"`
+	Args      json.RawMessage `json:"args"`
+	CreatedAt time.Time       `json:"created_at"`
+}
 
 type Backend struct {
 	mu     sync.Mutex
-	queue  []worker.Job
+	queue  []Job
 	cond   *sync.Cond
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -21,7 +28,7 @@ type Backend struct {
 func New(ctx context.Context) *Backend {
 	ctx, cancel := context.WithCancel(ctx)
 	b := &Backend{
-		queue:  make([]worker.Job, 0),
+		queue:  make([]Job, 0),
 		ctx:    ctx,
 		cancel: cancel,
 	}
@@ -29,7 +36,7 @@ func New(ctx context.Context) *Backend {
 	return b
 }
 
-func (b *Backend) Enqueue(ctx context.Context, job worker.Job) error {
+func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -37,18 +44,34 @@ func (b *Backend) Enqueue(ctx context.Context, job worker.Job) error {
 		return fmt.Errorf("queue is closed")
 	}
 
-	b.queue = append(b.queue, job)
+	var j Job
+	switch v := job.(type) {
+	case Job:
+		j = v
+	case *Job:
+		j = *v
+	default:
+		data, err := json.Marshal(job)
+		if err != nil {
+			return fmt.Errorf("marshal job: %w", err)
+		}
+		if err := json.Unmarshal(data, &j); err != nil {
+			return fmt.Errorf("unmarshal job: %w", err)
+		}
+	}
+
+	b.queue = append(b.queue, j)
 	b.cond.Signal()
 	return nil
 }
 
-func (b *Backend) Start(ctx context.Context, jobs chan<- worker.Job) error {
+func (b *Backend) Start(ctx context.Context, jobs chan<- interface{}) error {
 	b.wg.Add(1)
 	go b.consumeLoop(ctx, jobs)
 	return nil
 }
 
-func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- worker.Job) {
+func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- interface{}) {
 	defer b.wg.Done()
 
 	for {

@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-
-	"github.com/Samuel-chibueze/swift-worker/worker"
 )
+
+type Job struct {
+	ID        string          `json:"id"`
+	Worker    string          `json:"worker"`
+	Args      json.RawMessage `json:"args"`
+	CreatedAt time.Time       `json:"created_at"`
+}
 
 type Backend struct {
 	mu        sync.Mutex
@@ -85,7 +91,7 @@ func (b *Backend) connect() error {
 	return nil
 }
 
-func (b *Backend) Enqueue(ctx context.Context, job worker.Job) error {
+func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -93,7 +99,23 @@ func (b *Backend) Enqueue(ctx context.Context, job worker.Job) error {
 		return fmt.Errorf("channel is closed")
 	}
 
-	body, err := json.Marshal(job)
+	var j Job
+	switch v := job.(type) {
+	case Job:
+		j = v
+	case *Job:
+		j = *v
+	default:
+		data, err := json.Marshal(job)
+		if err != nil {
+			return fmt.Errorf("marshal job: %w", err)
+		}
+		if err := json.Unmarshal(data, &j); err != nil {
+			return fmt.Errorf("unmarshal job: %w", err)
+		}
+	}
+
+	body, err := json.Marshal(j)
 	if err != nil {
 		return fmt.Errorf("marshal job: %w", err)
 	}
@@ -118,7 +140,7 @@ func (b *Backend) Enqueue(ctx context.Context, job worker.Job) error {
 	return nil
 }
 
-func (b *Backend) Start(ctx context.Context, jobs chan<- worker.Job) error {
+func (b *Backend) Start(ctx context.Context, jobs chan<- interface{}) error {
 	b.mu.Lock()
 	if b.ch == nil {
 		b.mu.Unlock()
@@ -145,7 +167,7 @@ func (b *Backend) Start(ctx context.Context, jobs chan<- worker.Job) error {
 	return nil
 }
 
-func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delivery, jobs chan<- worker.Job) {
+func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delivery, jobs chan<- interface{}) {
 	defer b.wg.Done()
 
 	for {
@@ -158,7 +180,7 @@ func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delive
 				return
 			}
 
-			var job worker.Job
+			var job Job
 			if err := json.Unmarshal(delivery.Body, &job); err != nil {
 				_ = delivery.Nack(false, false)
 				continue

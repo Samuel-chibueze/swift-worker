@@ -1,56 +1,55 @@
 package worker
 
 import (
-    "encoding/json"
-    "fmt"
-    "time"
+	"encoding/json"
+	"fmt"
+	"time"
 
-    "github.com/google/uuid"
+	"github.com/google/uuid"
 )
 
 type Execution struct {
-    app      *App
-    worker   *Worker
-    name     string
-    args     []any
-    isClient bool
+	app      *App
+	worker   *Worker
+	name     string
+	args     []any
+	isClient bool
 }
 
-// Args passes data through - ANY type, ANY structure
 func (e *Execution) Args(args ...any) *Execution {
-    e.args = args
-    return e
+	e.args = args
+	return e
 }
 
 func (e *Execution) Submit() error {
-    if e.app == nil {
-        return fmt.Errorf("app is nil")
-    }
+	if e.app == nil {
+		return fmt.Errorf("app is nil")
+	}
 
-    name := e.name
-    if e.worker != nil {
-        name = e.worker.Name
-    }
+	name := e.name
+	if e.worker != nil {
+		name = e.worker.Name
+	}
 
-    if name == "" {
-        return fmt.Errorf("worker name is empty")
-    }
+	if name == "" {
+		return fmt.Errorf("worker name is empty")
+	}
 
-    argsJSON, err := json.Marshal(e.args)
-    if err != nil {
-        return fmt.Errorf("marshal args: %w", err)
-    }
+	argsJSON, err := json.Marshal(e.args)
+	if err != nil {
+		return fmt.Errorf("marshal args: %w", err)
+	}
 
-    job := Job{
-        ID:        uuid.New().String(),
-        Worker:    name,
-        Args:      argsJSON,
-        CreatedAt: time.Now().UTC(),
-    }
+	job := Job{
+		ID:        uuid.New().String(),
+		Worker:    name,
+		Args:      argsJSON,
+		CreatedAt: time.Now().UTC(),
+	}
 
-    if e.app.backend == nil {
-        return ErrNoBackend
-    }
+	if e.app.Backend == nil {
+		return ErrNoBackend
+	}
 
-    return e.app.backend.Enqueue(e.app.ctx, job)
+	return e.app.Backend.Enqueue(e.app.ctx, job)
 }

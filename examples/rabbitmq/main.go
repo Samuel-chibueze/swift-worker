@@ -19,8 +19,8 @@ func main() {
 
 	deploy := app.Worker(
 		"deploy",
-		func(id string) error {
-			fmt.Printf("[%s] Deploying: %s\n", time.Now().Format(time.RFC3339), id)
+		func(args ...any) error {
+			fmt.Printf("[%s] Deploying: %v\n", time.Now().Format(time.RFC3339), args)
 			time.Sleep(2 * time.Second)
 			return nil
 		},
@@ -30,7 +30,7 @@ func main() {
 	)
 
 	app.Exec(deploy).Args("deployment-123").Submit()
-	app.Exec(deploy).Args("deployment-456").Submit()
+	app.Exec(deploy).Args("api", "v1.2.3", "prod").Submit()
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)

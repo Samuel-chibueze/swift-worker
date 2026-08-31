@@ -14,11 +14,18 @@ func main() {
 
 	app := worker.New(ctx)
 
+	// Handler with multiple args
 	deploy := app.Worker(
 		"deploy",
-		func(id string) error {
-			fmt.Printf("Deploying: %s\n", id)
-			time.Sleep(1 * time.Second)
+		func(args ...any) error {
+			if len(args) >= 3 {
+				service := args[0].(string)
+				version := args[1].(string)
+				env := args[2].(string)
+				fmt.Printf("Deploying %s v%s to %s\n", service, version, env)
+				return nil
+			}
+			fmt.Printf("Deploying with: %v\n", args)
 			return nil
 		},
 		worker.WithConcurrency(10),
@@ -28,7 +35,7 @@ func main() {
 
 	health := app.Worker(
 		"health",
-		func() error {
+		func(args ...any) error {
 			fmt.Println("Health check")
 			return nil
 		},
@@ -36,8 +43,13 @@ func main() {
 
 	cleanup := app.Worker(
 		"cleanup",
-		func(name string, days int) error {
-			fmt.Printf("Cleaning up %s (%d days)\n", name, days)
+		func(args ...any) error {
+			if len(args) >= 2 {
+				name := args[0].(string)
+				days := args[1].(int)
+				fmt.Printf("Cleaning up %s (%d days)\n", name, days)
+				return nil
+			}
 			return nil
 		},
 		worker.WithConcurrency(1),
@@ -45,8 +57,8 @@ func main() {
 		worker.WithMaxRetries(1),
 	)
 
-	app.Exec(deploy).Args("deployment-123").Submit()
-	app.Exec(deploy).Args("deployment-456").Submit()
+	app.Exec(deploy).Args("api", "v1.2.3", "prod").Submit()
+	app.Exec(deploy).Args("auth", "v2.0.0", "staging").Submit()
 	app.Exec(health).Submit()
 	app.Exec(cleanup).Args("temp-files", 30).Submit()
 

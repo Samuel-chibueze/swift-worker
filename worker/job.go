@@ -1,13 +1,13 @@
 package worker
 
 import (
-    "time"
+	"encoding/json"
+	"time"
 )
 
-// Job is INTERNAL - users never see this.
 type Job struct {
-    ID        string    `json:"id"`
-    Worker    string    `json:"worker"`
-    Args      []byte    `json:"args"`
-    CreatedAt time.Time `json:"created_at"`
+	ID        string          `json:"id"`
+	Worker    string          `json:"worker"`
+	Args      json.RawMessage `json:"args"`
+	CreatedAt time.Time       `json:"created_at"`
 }

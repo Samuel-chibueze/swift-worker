@@ -19,10 +19,12 @@ func main() {
 
 	deploy := app.Worker(
 		"deploy",
-		func(service, version, env string) error {
-			fmt.Printf("[%s] deploying %s v%s to %s\n",
-				time.Now().Format(time.RFC3339),
-				service, version, env)
+		func(args ...any) error {
+			if len(args) >= 3 {
+				fmt.Printf("[%s] deploying %v %v to %v\n",
+					time.Now().Format(time.RFC3339),
+					args[0], args[1], args[2])
+			}
 			time.Sleep(2 * time.Second)
 			return nil
 		},

@@ -14,13 +14,13 @@ func TestBasicWorker(t *testing.T) {
 	app := worker.New(ctx)
 
 	executed := false
-	w := app.Worker("test", func() error {
+	w := app.Worker("test", func(args ...any) error {
 		executed = true
 		return nil
 	})
 
-	backend := memory.New(ctx)
-	app.backend = backend
+	// Use memory backend
+	app.Backend = memory.New(ctx)
 
 	if err := app.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)

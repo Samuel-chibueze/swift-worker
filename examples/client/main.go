@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	// "log"
 	"time"
 
 	"github.com/Samuel-chibueze/swift-worker/worker"
