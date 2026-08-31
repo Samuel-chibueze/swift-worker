@@ -9,7 +9,6 @@ import (
     "github.com/Samuel-chibueze/swift-worker/worker"
 )
 
-// Your existing function
 func handleDeploy(service, version, env string) error {
     fmt.Printf("[%s] ?? Deploying %s version %s to %s\n", 
         time.Now().Format(time.RFC3339),
@@ -26,14 +25,12 @@ func main() {
         worker.WithRabbitMQ("amqp://guest:guest@localhost:5672/"),
     )
 
-    // Register your function directly - NO wrapper!
     deploy := app.Worker("deploy", handleDeploy, 
         worker.WithConcurrency(4),
         worker.WithTimeout(10*time.Second),
         worker.WithMaxRetries(3),
     )
 
-    // Submit jobs
     for i := 1; i <= 5; i++ {
         app.Exec(deploy).Args(
             fmt.Sprintf("service-%d", i),
@@ -41,6 +38,8 @@ func main() {
             "prod",
         ).Submit()
     }
+
+    fmt.Println("?? All jobs submitted")
 
     if err := app.Start(); err != nil {
         log.Fatal(err)

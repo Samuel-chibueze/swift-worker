@@ -9,25 +9,21 @@ import (
     "github.com/Samuel-chibueze/swift-worker/worker"
 )
 
-// Your existing function - ANY signature you want!
 func handleDeploy(service, version, env string) error {
     fmt.Printf("?? Deploying %s version %s to %s\n", service, version, env)
     return nil
 }
 
-// Single argument
 func handleCleanup(name string) error {
     fmt.Printf("?? Cleaning up: %s\n", name)
     return nil
 }
 
-// No arguments
 func handleHealth() error {
     fmt.Println("?? Health check")
     return nil
 }
 
-// With struct
 type DeployJob struct {
     Service string
     Version string
@@ -45,13 +41,11 @@ func main() {
     fmt.Println("?? Testing with ANY function signatures...")
     app := worker.New(ctx)
 
-    // Register ANY function - NO wrapper needed!
     deploy := app.Worker("deploy", handleDeploy, worker.WithConcurrency(2))
     cleanup := app.Worker("cleanup", handleCleanup)
     health := app.Worker("health", handleHealth)
     structDeploy := app.Worker("struct", handleStruct)
 
-    // Submit jobs with matching args
     app.Exec(deploy).Args("api", "v1.2.3", "prod").Submit()
     app.Exec(deploy).Args("auth", "v2.0.0", "staging").Submit()
     app.Exec(cleanup).Args("temp-files").Submit()

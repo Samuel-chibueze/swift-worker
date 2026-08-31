@@ -13,26 +13,26 @@ func WrapHandler(fn interface{}) Handler {
     return func(args ...any) error {
         v := reflect.ValueOf(fn)
         
-        // Check if it's a function
         if v.Kind() != reflect.Func {
             return fmt.Errorf("handler is not a function (got %T)", fn)
         }
 
-        // Prepare arguments for the function call
+        funcType := v.Type()
+        if funcType.NumIn() != len(args) {
+            return fmt.Errorf("expected %d arguments, got %d", funcType.NumIn(), len(args))
+        }
+
         in := make([]reflect.Value, len(args))
         for i, arg := range args {
             in[i] = reflect.ValueOf(arg)
         }
 
-        // Call the function
         result := v.Call(in)
         
-        // Handle return values
         if len(result) == 0 {
             return nil
         }
         
-        // Check if last return is error
         if err, ok := result[len(result)-1].Interface().(error); ok {
             return err
         }
