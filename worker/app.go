@@ -14,30 +14,36 @@ import (
 )
 
 type App struct {
-    mu              sync.RWMutex
-    ctx             context.Context
-    cancel          context.CancelFunc
-    workers         map[string]*Worker
-    Backend         Backend
-    backendURL      string
-    scheduler       *scheduler.Scheduler
-    started         bool
-    stopped         bool
-    wg              sync.WaitGroup
-    shutdownTimeout time.Duration
-    jobsCh          chan types.Job
+    mu                 sync.RWMutex
+    ctx                context.Context
+    cancel             context.CancelFunc
+    workers            map[string]*Worker
+    Backend            Backend
+    backendURL         string
+    scheduler          *scheduler.Scheduler
+    started            bool
+    stopped            bool
+    wg                 sync.WaitGroup
+    shutdownTimeout    time.Duration
+    jobsCh             chan types.Job
+    defaultTimeout     time.Duration
+    defaultRetries     int
+    defaultConcurrency int
 }
 
 func New(ctx context.Context, opts ...Option) *App {
     ctx, cancel := context.WithCancel(ctx)
 
     app := &App{
-        ctx:             ctx,
-        cancel:          cancel,
-        workers:         make(map[string]*Worker),
-        jobsCh:          make(chan types.Job, 100),
-        shutdownTimeout: 30 * time.Second,
-        Backend:         memory.New(ctx),
+        ctx:                ctx,
+        cancel:             cancel,
+        workers:            make(map[string]*Worker),
+        jobsCh:             make(chan types.Job, 100),
+        shutdownTimeout:    30 * time.Second,
+        Backend:            memory.New(ctx),
+        defaultTimeout:     5 * time.Minute,
+        defaultRetries:     3,
+        defaultConcurrency: 1,
     }
 
     for _, opt := range opts {
@@ -63,6 +69,13 @@ func (a *App) Exec(w *Worker) *Execution {
     return &Execution{
         app:    a,
         worker: w,
+    }
+}
+
+func (a *App) Queue(name string) *Execution {
+    return &Execution{
+        app:  a,
+        name: name,
     }
 }
 
@@ -115,10 +128,10 @@ func (a *App) Run() error {
 
     <-a.ctx.Done()
 
-    ctx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
     defer cancel()
 
-    return a.Shutdown(ctx)
+    return a.Shutdown(shutdownCtx)
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
@@ -223,8 +236,15 @@ func (a *App) poolLoop() {
                     a.wg.Done()
                 }()
 
-                _, cancel := context.WithTimeout(a.ctx, timeout)
-                defer cancel()
+                // Create context with timeout if specified
+                var execCtx context.Context
+                var cancel context.CancelFunc
+                if timeout > 0 {
+                    execCtx, cancel = context.WithTimeout(a.ctx, timeout)
+                    defer cancel()
+                } else {
+                    execCtx = a.ctx
+                }
 
                 defer func() {
                     if r := recover(); r != nil {
@@ -234,11 +254,13 @@ func (a *App) poolLoop() {
 
                 var args []any
                 if err := json.Unmarshal(job.Args, &args); err != nil {
-                    _ = handler()
+                    // On error, call handler with context only
+                    _ = handler(execCtx)
                     return
                 }
 
-                _ = handler(args...)
+                // Call handler with context and args
+                _ = handler(execCtx, args...)
             }()
         }
     }

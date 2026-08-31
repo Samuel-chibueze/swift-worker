@@ -5,8 +5,8 @@ import (
     "fmt"
     "time"
 
-    "github.com/Samuel-chibueze/swift-worker/types"
     "github.com/google/uuid"
+    "github.com/Samuel-chibueze/swift-worker/types"
 )
 
 type Execution struct {

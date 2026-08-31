@@ -1,6 +1,7 @@
 package middleware
 
 import (
+    "context"
     "fmt"
     "runtime/debug"
     "time"
@@ -19,18 +20,24 @@ func Chain(middleware ...Middleware) Middleware {
     }
 }
 
+// Logging middleware - logs job execution with context
 func Logging(logger func(msg string, args ...any)) Middleware {
     return func(next worker.Handler) worker.Handler {
-        return func(args ...any) error {
+        return func(ctx context.Context, args ...any) error {
             start := time.Now()
-            err := next(args...)
+            err := next(ctx, args...)
             duration := time.Since(start)
 
             if logger != nil {
                 if err != nil {
-                    logger("job failed", "duration", duration, "error", err, "args", args)
+                    logger("job failed", 
+                        "duration", duration, 
+                        "error", err, 
+                        "args", args)
                 } else {
-                    logger("job completed", "duration", duration, "args", args)
+                    logger("job completed", 
+                        "duration", duration, 
+                        "args", args)
                 }
             }
 
@@ -39,25 +46,27 @@ func Logging(logger func(msg string, args ...any)) Middleware {
     }
 }
 
+// Recovery middleware - recovers from panics
 func Recovery() Middleware {
     return func(next worker.Handler) worker.Handler {
-        return func(args ...any) (err error) {
+        return func(ctx context.Context, args ...any) (err error) {
             defer func() {
                 if r := recover(); r != nil {
                     err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
                 }
             }()
-            return next(args...)
+            return next(ctx, args...)
         }
     }
 }
 
+// Timeout middleware - adds timeout to job execution
 func Timeout(timeout time.Duration) Middleware {
     return func(next worker.Handler) worker.Handler {
-        return func(args ...any) error {
+        return func(ctx context.Context, args ...any) error {
             done := make(chan error, 1)
             go func() {
-                done <- next(args...)
+                done <- next(ctx, args...)
             }()
 
             select {
@@ -65,7 +74,38 @@ func Timeout(timeout time.Duration) Middleware {
                 return err
             case <-time.After(timeout):
                 return fmt.Errorf("timeout after %v", timeout)
+            case <-ctx.Done():
+                return ctx.Err()
             }
+        }
+    }
+}
+
+// ContextLogger - logs context information
+func ContextLogger(logger func(msg string, args ...any)) Middleware {
+    return func(next worker.Handler) worker.Handler {
+        return func(ctx context.Context, args ...any) error {
+            // Log context info
+            if logger != nil {
+                // Check if context has deadline
+                deadline, hasDeadline := ctx.Deadline()
+                if hasDeadline {
+                    logger("context has deadline", 
+                        "deadline", deadline,
+                        "time_left", time.Until(deadline))
+                }
+            }
+            return next(ctx, args...)
+        }
+    }
+}
+
+// WithContext - adds values to context for downstream handlers
+func WithContext(key, value interface{}) Middleware {
+    return func(next worker.Handler) worker.Handler {
+        return func(ctx context.Context, args ...any) error {
+            ctx = context.WithValue(ctx, key, value)
+            return next(ctx, args...)
         }
     }
 }

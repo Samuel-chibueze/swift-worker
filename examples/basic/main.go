@@ -9,62 +9,54 @@ import (
     "github.com/Samuel-chibueze/swift-worker/worker"
 )
 
-func handleDeploy(service, version, env string) error {
-    fmt.Printf("?? Deploying %s version %s to %s\n", service, version, env)
-    return nil
-}
-
-func handleCleanup(name string) error {
-    fmt.Printf("?? Cleaning up: %s\n", name)
-    return nil
-}
-
-func handleHealth() error {
-    fmt.Println("?? Health check")
-    return nil
-}
-
-type DeployJob struct {
-    Service string
-    Version string
-    Env     string
-}
-
-func handleStruct(job DeployJob) error {
-    fmt.Printf("?? Deploying struct: %+v\n", job)
-    return nil
-}
-
 func main() {
     ctx := context.Background()
 
-    fmt.Println("?? Testing with ANY function signatures...")
-    app := worker.New(ctx)
+    fmt.Println("========================================")
+    fmt.Println("?? BASIC SWIFT WORKER (Memory Backend)")
+    fmt.Println("========================================")
+    fmt.Println()
 
-    deploy := app.Worker("deploy", handleDeploy, worker.WithConcurrency(2))
-    cleanup := app.Worker("cleanup", handleCleanup)
-    health := app.Worker("health", handleHealth)
-    structDeploy := app.Worker("struct", handleStruct)
+    // Memory backend (default) - NO RabbitMQ needed!
+    app := worker.New(
+        ctx,
+        worker.WithDefaultTimeout(30*time.Second),
+        worker.WithDefaultRetries(3),
+        worker.WithDefaultConcurrency(2),
+    )
 
-    app.Exec(deploy).Args("api", "v1.2.3", "prod").Submit()
-    app.Exec(deploy).Args("auth", "v2.0.0", "staging").Submit()
-    app.Exec(cleanup).Args("temp-files").Submit()
-    app.Exec(health).Submit()
-    app.Exec(structDeploy).Args(DeployJob{
-        Service: "gateway",
-        Version: "v3.0.0",
-        Env:     "prod",
-    }).Submit()
+    deploy := app.Worker(
+        "deploy",
+        func(service, version, env string) error {
+            fmt.Printf("[%s] ?? Deploying %s version %s to %s\n",
+                time.Now().Format(time.RFC3339),
+                service, version, env)
+            return nil
+        },
+        worker.WithConcurrency(4),
+    )
 
+    // Use Exec() for registered workers
+    fmt.Println("?? Submitting job...")
+    err := app.Exec(deploy).Args("api-service", "v1.2.3", "production").Submit()
+    if err != nil {
+        log.Fatalf("? Submit error: %v", err)
+    }
+
+    fmt.Println("??  Starting worker...")
     if err := app.Start(); err != nil {
-        log.Fatal(err)
+        log.Fatalf("? Start failed: %v", err)
     }
 
     time.Sleep(2 * time.Second)
 
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
-    app.Shutdown(ctx)
 
-    fmt.Println("? All tests passed!")
+    if err := app.Shutdown(shutdownCtx); err != nil {
+        log.Printf("? Shutdown error: %v", err)
+    }
+
+    fmt.Println()
+    fmt.Println("? Test complete!")
 }

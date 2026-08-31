@@ -19,9 +19,9 @@ func newWorker(name string, handler Handler, app *App) *Worker {
     return &Worker{
         Name:        name,
         Handler:     handler,
-        Concurrency: 1,
-        Timeout:     30 * time.Second,
-        MaxRetries:  3,
+        Concurrency: app.defaultConcurrency,
+        Timeout:     app.defaultTimeout,
+        MaxRetries:  app.defaultRetries,
         app:         app,
     }
 }
