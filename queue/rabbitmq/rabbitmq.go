@@ -5,7 +5,6 @@ import (
     "encoding/json"
     "fmt"
     "sync"
-    // "time"
 
     amqp "github.com/rabbitmq/amqp091-go"
 
@@ -64,7 +63,6 @@ func (b *Backend) connect() error {
         return fmt.Errorf("create channel: %w", err)
     }
 
-    // Declare queue
     q, err := ch.QueueDeclare(
         b.queueName,
         true,
@@ -81,7 +79,6 @@ func (b *Backend) connect() error {
 
     fmt.Printf("[RabbitMQ] Queue declared: %s (messages: %d)\n", q.Name, q.Messages)
 
-    // Set prefetch
     err = ch.Qos(10, 0, false)
     if err != nil {
         ch.Close()
@@ -189,7 +186,6 @@ func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delive
 
             fmt.Printf("[RabbitMQ] ?? Forwarding job: %s (worker: %s)\n", job.ID, job.Worker)
 
-            // Try to send to jobs channel
             select {
             case jobs <- job:
                 fmt.Printf("[RabbitMQ] ? Job %s forwarded\n", job.ID)
