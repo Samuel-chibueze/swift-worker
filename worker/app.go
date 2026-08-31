@@ -90,43 +90,55 @@ func (a *App) Start() error {
     a.mu.Lock()
     defer a.mu.Unlock()
 
+    fmt.Println("[App] ?? Start() called")
+
     if a.started {
         return ErrAlreadyStarted
     }
 
     if a.backendURL != "" {
+        fmt.Printf("[App] ?? Connecting to RabbitMQ: %s\n", a.backendURL)
         backend, err := rabbitmq.New(a.ctx, a.backendURL)
         if err != nil {
             return fmt.Errorf("init rabbitmq: %w", err)
         }
         a.Backend = backend
+        fmt.Println("[App] ? RabbitMQ backend created")
     }
 
     if a.Backend == nil {
         return ErrNoBackend
     }
 
+    fmt.Println("[App] ?? Starting backend consumer...")
     if err := a.Backend.Start(a.ctx, a.jobsCh); err != nil {
         return fmt.Errorf("start backend: %w", err)
     }
+    fmt.Println("[App] ? Backend consumer started")
 
+    fmt.Println("[App] ?? Starting pool loop...")
     a.wg.Add(1)
     go a.poolLoop()
+    fmt.Println("[App] ? Pool loop started")
 
     if a.scheduler != nil {
         a.scheduler.Start()
     }
 
     a.started = true
+    fmt.Println("[App] ? Start() completed successfully")
     return nil
 }
 
 func (a *App) Run() error {
+    fmt.Println("[App] ?? Run() called")
     if err := a.Start(); err != nil {
         return err
     }
 
+    fmt.Println("[App] ? Waiting for ctx.Done()...")
     <-a.ctx.Done()
+    fmt.Println("[App] ?? Context cancelled")
 
     shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
     defer cancel()
@@ -190,31 +202,35 @@ func (a *App) Close() error {
 func (a *App) poolLoop() {
     defer a.wg.Done()
 
+    fmt.Println("[PoolLoop] ?? Started")
+
     active := make(map[string]int)
     var mu sync.Mutex
 
     for {
         select {
         case <-a.ctx.Done():
+            fmt.Println("[PoolLoop] ? Context cancelled, exiting")
             return
 
         case job, ok := <-a.jobsCh:
             if !ok {
+                fmt.Println("[PoolLoop] ? jobsCh closed, exiting")
                 return
             }
 
-            fmt.Printf("[Worker] ?? Received job: %s (worker: %s)\n", job.ID, job.Worker)
+            fmt.Printf("[PoolLoop] ?? Received job: %s (worker: %s)\n", job.ID, job.Worker)
 
             a.mu.RLock()
             worker, exists := a.workers[job.Worker]
             a.mu.RUnlock()
 
             if !exists {
-                fmt.Printf("[Worker] ? Worker not found: %s\n", job.Worker)
+                fmt.Printf("[PoolLoop] ? Worker not found: %s\n", job.Worker)
                 continue
             }
 
-            fmt.Printf("[Worker] ? Found worker: %s\n", worker.Name)
+            fmt.Printf("[PoolLoop] ? Found worker: %s\n", worker.Name)
 
             worker.mu.RLock()
             concurrency := worker.Concurrency
@@ -226,12 +242,14 @@ func (a *App) poolLoop() {
             current := active[job.Worker]
             if current >= concurrency {
                 mu.Unlock()
-                fmt.Printf("[Worker] ? Concurrency limit reached, requeuing\n")
+                fmt.Printf("[PoolLoop] ? Concurrency limit reached (%d/%d), requeuing\n", current, concurrency)
                 a.jobsCh <- job
                 continue
             }
             active[job.Worker] = current + 1
             mu.Unlock()
+
+            fmt.Printf("[PoolLoop] ?? Starting goroutine for job %s (active: %d/%d)\n", job.ID, current+1, concurrency)
 
             a.wg.Add(1)
             go func() {
@@ -240,6 +258,7 @@ func (a *App) poolLoop() {
                     active[job.Worker]--
                     mu.Unlock()
                     a.wg.Done()
+                    fmt.Printf("[PoolLoop] ? Goroutine finished for job %s\n", job.ID)
                 }()
 
                 // Create context with timeout if specified
@@ -254,23 +273,23 @@ func (a *App) poolLoop() {
 
                 defer func() {
                     if r := recover(); r != nil {
-                        fmt.Printf("[Worker] ?? Panic recovered: %v\n", r)
+                        fmt.Printf("[PoolLoop] ?? Panic recovered: %v\n", r)
                     }
                 }()
 
                 var args []any
                 if err := json.Unmarshal(job.Args, &args); err != nil {
-                    fmt.Printf("[Worker] ? Failed to unmarshal args: %v\n", err)
+                    fmt.Printf("[PoolLoop] ? Failed to unmarshal args: %v\n", err)
                     _ = handler(execCtx)
                     return
                 }
 
-                fmt.Printf("[Worker] ?? Calling handler with args: %+v\n", args)
+                fmt.Printf("[PoolLoop] ?? Calling handler with args: %+v\n", args)
                 err := handler(execCtx, args...)
                 if err != nil {
-                    fmt.Printf("[Worker] ? Handler returned error: %v\n", err)
+                    fmt.Printf("[PoolLoop] ? Handler returned error: %v\n", err)
                 } else {
-                    fmt.Printf("[Worker] ? Handler completed successfully\n")
+                    fmt.Printf("[PoolLoop] ? Handler completed successfully\n")
                 }
             }()
         }
