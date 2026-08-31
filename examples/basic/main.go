@@ -1,40 +1,76 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"log"
-	"time"
+    "context"
+    "fmt"
+    "log"
+    "time"
 
-	"github.com/Samuel-chibueze/swift-worker/worker"
+    "github.com/Samuel-chibueze/swift-worker/worker"
 )
 
+// Your existing function - ANY signature you want!
+func handleDeploy(service, version, env string) error {
+    fmt.Printf("?? Deploying %s version %s to %s\n", service, version, env)
+    return nil
+}
+
+// Single argument
+func handleCleanup(name string) error {
+    fmt.Printf("?? Cleaning up: %s\n", name)
+    return nil
+}
+
+// No arguments
+func handleHealth() error {
+    fmt.Println("?? Health check")
+    return nil
+}
+
+// With struct
+type DeployJob struct {
+    Service string
+    Version string
+    Env     string
+}
+
+func handleStruct(job DeployJob) error {
+    fmt.Printf("?? Deploying struct: %+v\n", job)
+    return nil
+}
+
 func main() {
-	ctx := context.Background()
+    ctx := context.Background()
 
-	app := worker.New(ctx)
+    fmt.Println("?? Testing with ANY function signatures...")
+    app := worker.New(ctx)
 
-	deploy := app.Worker(
-		"deploy",
-		func(args ...any) error {
-			fmt.Printf("Deploying: %v\n", args)
-			return nil
-		},
-		worker.WithConcurrency(4),
-	)
+    // Register ANY function - NO wrapper needed!
+    deploy := app.Worker("deploy", handleDeploy, worker.WithConcurrency(2))
+    cleanup := app.Worker("cleanup", handleCleanup)
+    health := app.Worker("health", handleHealth)
+    structDeploy := app.Worker("struct", handleStruct)
 
-	app.Exec(deploy).Args("deployment-123").Submit()
-	app.Exec(deploy).Args("api", "v1.2.3", "prod").Submit()
+    // Submit jobs with matching args
+    app.Exec(deploy).Args("api", "v1.2.3", "prod").Submit()
+    app.Exec(deploy).Args("auth", "v2.0.0", "staging").Submit()
+    app.Exec(cleanup).Args("temp-files").Submit()
+    app.Exec(health).Submit()
+    app.Exec(structDeploy).Args(DeployJob{
+        Service: "gateway",
+        Version: "v3.0.0",
+        Env:     "prod",
+    }).Submit()
 
-	if err := app.Start(); err != nil {
-		log.Fatal(err)
-	}
+    if err := app.Start(); err != nil {
+        log.Fatal(err)
+    }
 
-	time.Sleep(2 * time.Second)
+    time.Sleep(2 * time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	app.Shutdown(ctx)
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    app.Shutdown(ctx)
 
-	fmt.Println("Done!")
+    fmt.Println("? All tests passed!")
 }

@@ -47,18 +47,13 @@ func New(ctx context.Context, opts ...Option) *App {
     return app
 }
 
+// Worker accepts ANY function - uses reflection to handle it
 func (a *App) Worker(name string, handler interface{}, opts ...WorkerOption) *Worker {
     a.mu.Lock()
     defer a.mu.Unlock()
 
-    // Wrap the handler if it's not already a Handler type
-    var h Handler
-    switch v := handler.(type) {
-    case Handler:
-        h = v
-    default:
-        h = WrapHandler(v)
-    }
+    // Wrap the handler using reflection
+    h := WrapHandler(handler)
 
     w := newWorker(name, h, a)
     w.applyOptions(opts...)
