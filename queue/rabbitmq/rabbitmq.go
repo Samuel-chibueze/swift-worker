@@ -5,18 +5,11 @@ import (
     "encoding/json"
     "fmt"
     "sync"
-    "time"
 
     amqp "github.com/rabbitmq/amqp091-go"
-)
 
-// Job is defined locally - no import from worker
-type Job struct {
-    ID        string          `json:"id"`
-    Worker    string          `json:"worker"`
-    Args      json.RawMessage `json:"args"`
-    CreatedAt time.Time       `json:"created_at"`
-}
+    "github.com/Samuel-chibueze/swift-worker/types"
+)
 
 type Backend struct {
     mu        sync.Mutex
@@ -92,7 +85,7 @@ func (b *Backend) connect() error {
     return nil
 }
 
-func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
+func (b *Backend) Enqueue(ctx context.Context, job types.Job) error {
     b.mu.Lock()
     defer b.mu.Unlock()
 
@@ -100,31 +93,7 @@ func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
         return fmt.Errorf("channel is closed")
     }
 
-    var j Job
-    switch v := job.(type) {
-    case map[string]interface{}:
-        data, err := json.Marshal(v)
-        if err != nil {
-            return fmt.Errorf("marshal job: %w", err)
-        }
-        if err := json.Unmarshal(data, &j); err != nil {
-            return fmt.Errorf("unmarshal job: %w", err)
-        }
-    case Job:
-        j = v
-    case *Job:
-        j = *v
-    default:
-        data, err := json.Marshal(job)
-        if err != nil {
-            return fmt.Errorf("marshal job: %w", err)
-        }
-        if err := json.Unmarshal(data, &j); err != nil {
-            return fmt.Errorf("unmarshal job: %w", err)
-        }
-    }
-
-    body, err := json.Marshal(j)
+    body, err := json.Marshal(job)
     if err != nil {
         return fmt.Errorf("marshal job: %w", err)
     }
@@ -149,7 +118,7 @@ func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
     return nil
 }
 
-func (b *Backend) Start(ctx context.Context, jobs chan<- interface{}) error {
+func (b *Backend) Start(ctx context.Context, jobs chan<- types.Job) error {
     b.mu.Lock()
     if b.ch == nil {
         b.mu.Unlock()
@@ -176,7 +145,7 @@ func (b *Backend) Start(ctx context.Context, jobs chan<- interface{}) error {
     return nil
 }
 
-func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delivery, jobs chan<- interface{}) {
+func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delivery, jobs chan<- types.Job) {
     defer b.wg.Done()
 
     for {
@@ -189,7 +158,7 @@ func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delive
                 return
             }
 
-            var job Job
+            var job types.Job
             if err := json.Unmarshal(delivery.Body, &job); err != nil {
                 _ = delivery.Nack(false, false)
                 continue

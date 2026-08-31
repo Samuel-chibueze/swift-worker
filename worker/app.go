@@ -10,6 +10,7 @@ import (
     "github.com/Samuel-chibueze/swift-worker/queue/memory"
     "github.com/Samuel-chibueze/swift-worker/queue/rabbitmq"
     "github.com/Samuel-chibueze/swift-worker/scheduler"
+    "github.com/Samuel-chibueze/swift-worker/types"
 )
 
 type App struct {
@@ -24,7 +25,7 @@ type App struct {
     stopped         bool
     wg              sync.WaitGroup
     shutdownTimeout time.Duration
-    jobsCh          chan interface{}
+    jobsCh          chan types.Job
 }
 
 func New(ctx context.Context, opts ...Option) *App {
@@ -34,7 +35,7 @@ func New(ctx context.Context, opts ...Option) *App {
         ctx:             ctx,
         cancel:          cancel,
         workers:         make(map[string]*Worker),
-        jobsCh:          make(chan interface{}, 100),
+        jobsCh:          make(chan types.Job, 100),
         shutdownTimeout: 30 * time.Second,
         Backend:         memory.New(ctx),
     }
@@ -182,38 +183,9 @@ func (a *App) poolLoop() {
         case <-a.ctx.Done():
             return
 
-        case jobInterface, ok := <-a.jobsCh:
+        case job, ok := <-a.jobsCh:
             if !ok {
                 return
-            }
-
-            // Convert to worker.Job
-            var job Job
-            switch v := jobInterface.(type) {
-            case memory.Job:
-                job = Job{
-                    ID:        v.ID,
-                    Worker:    v.Worker,
-                    Args:      v.Args,
-                    CreatedAt: v.CreatedAt,
-                }
-            case rabbitmq.Job:
-                job = Job{
-                    ID:        v.ID,
-                    Worker:    v.Worker,
-                    Args:      v.Args,
-                    CreatedAt: v.CreatedAt,
-                }
-            case Job:
-                job = v
-            default:
-                data, err := json.Marshal(jobInterface)
-                if err != nil {
-                    continue
-                }
-                if err := json.Unmarshal(data, &job); err != nil {
-                    continue
-                }
             }
 
             a.mu.RLock()
@@ -234,7 +206,7 @@ func (a *App) poolLoop() {
             current := active[job.Worker]
             if current >= concurrency {
                 mu.Unlock()
-                a.jobsCh <- jobInterface
+                a.jobsCh <- job
                 continue
             }
             active[job.Worker] = current + 1

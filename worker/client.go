@@ -3,22 +3,22 @@ package worker
 import "context"
 
 type Client struct {
-	app *App
+    app *App
 }
 
 func NewClient(ctx context.Context, opts ...Option) *Client {
-	app := New(ctx, opts...)
-	return &Client{app: app}
+    app := New(ctx, opts...)
+    return &Client{app: app}
 }
 
 func (c *Client) Queue(name string) *Execution {
-	return &Execution{
-		app:      c.app,
-		name:     name,
-		isClient: true,
-	}
+    return &Execution{
+        app:      c.app,
+        name:     name,
+        isClient: true,
+    }
 }
 
 func (c *Client) Close() error {
-	return c.app.Close()
+    return c.app.Close()
 }

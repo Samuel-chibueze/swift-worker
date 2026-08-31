@@ -2,23 +2,15 @@ package memory
 
 import (
     "context"
-    "encoding/json"
     "fmt"
     "sync"
-    "time"
-)
 
-// Job is defined locally - no import from worker
-type Job struct {
-    ID        string          `json:"id"`
-    Worker    string          `json:"worker"`
-    Args      json.RawMessage `json:"args"`
-    CreatedAt time.Time       `json:"created_at"`
-}
+    "github.com/Samuel-chibueze/swift-worker/types"
+)
 
 type Backend struct {
     mu     sync.Mutex
-    queue  []Job
+    queue  []types.Job
     cond   *sync.Cond
     ctx    context.Context
     cancel context.CancelFunc
@@ -29,7 +21,7 @@ type Backend struct {
 func New(ctx context.Context) *Backend {
     ctx, cancel := context.WithCancel(ctx)
     b := &Backend{
-        queue:  make([]Job, 0),
+        queue:  make([]types.Job, 0),
         ctx:    ctx,
         cancel: cancel,
     }
@@ -37,8 +29,7 @@ func New(ctx context.Context) *Backend {
     return b
 }
 
-// Enqueue accepts interface{} and converts to local Job
-func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
+func (b *Backend) Enqueue(ctx context.Context, job types.Job) error {
     b.mu.Lock()
     defer b.mu.Unlock()
 
@@ -46,46 +37,18 @@ func (b *Backend) Enqueue(ctx context.Context, job interface{}) error {
         return fmt.Errorf("queue is closed")
     }
 
-    var j Job
-    
-    // Convert interface{} to Job
-    switch v := job.(type) {
-    case map[string]interface{}:
-        // Try to convert from map
-        data, err := json.Marshal(v)
-        if err != nil {
-            return fmt.Errorf("marshal job: %w", err)
-        }
-        if err := json.Unmarshal(data, &j); err != nil {
-            return fmt.Errorf("unmarshal job: %w", err)
-        }
-    case Job:
-        j = v
-    case *Job:
-        j = *v
-    default:
-        // Try JSON marshaling
-        data, err := json.Marshal(job)
-        if err != nil {
-            return fmt.Errorf("marshal job: %w", err)
-        }
-        if err := json.Unmarshal(data, &j); err != nil {
-            return fmt.Errorf("unmarshal job: %w", err)
-        }
-    }
-
-    b.queue = append(b.queue, j)
+    b.queue = append(b.queue, job)
     b.cond.Signal()
     return nil
 }
 
-func (b *Backend) Start(ctx context.Context, jobs chan<- interface{}) error {
+func (b *Backend) Start(ctx context.Context, jobs chan<- types.Job) error {
     b.wg.Add(1)
     go b.consumeLoop(ctx, jobs)
     return nil
 }
 
-func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- interface{}) {
+func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- types.Job) {
     defer b.wg.Done()
 
     for {

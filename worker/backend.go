@@ -1,10 +1,12 @@
 package worker
 
-import "context"
+import (
+    "context"
+    "github.com/Samuel-chibueze/swift-worker/types"
+)
 
-// Backend interface uses interface{} to avoid type conflicts
 type Backend interface {
-	Enqueue(ctx context.Context, job interface{}) error
-	Start(ctx context.Context, jobs chan<- interface{}) error
-	Close() error
+    Enqueue(ctx context.Context, job types.Job) error
+    Start(ctx context.Context, jobs chan<- types.Job) error
+    Close() error
 }
