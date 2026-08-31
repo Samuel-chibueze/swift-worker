@@ -203,13 +203,18 @@ func (a *App) poolLoop() {
                 return
             }
 
+            fmt.Printf("[Worker] ?? Received job: %s (worker: %s)\n", job.ID, job.Worker)
+
             a.mu.RLock()
             worker, exists := a.workers[job.Worker]
             a.mu.RUnlock()
 
             if !exists {
+                fmt.Printf("[Worker] ? Worker not found: %s\n", job.Worker)
                 continue
             }
+
+            fmt.Printf("[Worker] ? Found worker: %s\n", worker.Name)
 
             worker.mu.RLock()
             concurrency := worker.Concurrency
@@ -221,6 +226,7 @@ func (a *App) poolLoop() {
             current := active[job.Worker]
             if current >= concurrency {
                 mu.Unlock()
+                fmt.Printf("[Worker] ? Concurrency limit reached, requeuing\n")
                 a.jobsCh <- job
                 continue
             }
@@ -248,19 +254,24 @@ func (a *App) poolLoop() {
 
                 defer func() {
                     if r := recover(); r != nil {
-                        // Panic recovered
+                        fmt.Printf("[Worker] ?? Panic recovered: %v\n", r)
                     }
                 }()
 
                 var args []any
                 if err := json.Unmarshal(job.Args, &args); err != nil {
-                    // On error, call handler with context only
+                    fmt.Printf("[Worker] ? Failed to unmarshal args: %v\n", err)
                     _ = handler(execCtx)
                     return
                 }
 
-                // Call handler with context and args
-                _ = handler(execCtx, args...)
+                fmt.Printf("[Worker] ?? Calling handler with args: %+v\n", args)
+                err := handler(execCtx, args...)
+                if err != nil {
+                    fmt.Printf("[Worker] ? Handler returned error: %v\n", err)
+                } else {
+                    fmt.Printf("[Worker] ? Handler completed successfully\n")
+                }
             }()
         }
     }
