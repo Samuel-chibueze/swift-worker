@@ -102,7 +102,6 @@ func (b *Backend) Enqueue(ctx context.Context, job types.Job) error {
         return fmt.Errorf("channel is closed")
     }
 
-    // Marshal the ENTIRE job to JSON
     body, err := json.Marshal(job)
     if err != nil {
         return fmt.Errorf("marshal job: %w", err)
@@ -186,10 +185,12 @@ func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delive
             }
 
             fmt.Printf("[RabbitMQ] ?? Forwarding job: %s (worker: %s)\n", job.ID, job.Worker)
+            fmt.Printf("[RabbitMQ] ?? Args: %s\n", string(job.Args))
 
             select {
             case jobs <- job:
                 fmt.Printf("[RabbitMQ] ? Job %s forwarded\n", job.ID)
+                // V1: ACK immediately - V2: move to after handler
                 if err := delivery.Ack(false); err != nil {
                     fmt.Printf("[RabbitMQ] ? Failed to ACK: %v\n", err)
                 }

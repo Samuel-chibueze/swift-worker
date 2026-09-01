@@ -36,7 +36,7 @@ func (e *Execution) Submit() error {
         return fmt.Errorf("worker name is empty")
     }
 
-    // Marshal args to JSON ONCE here
+    // Marshal args to JSON array
     argsJSON, err := json.Marshal(e.args)
     if err != nil {
         return fmt.Errorf("marshal args: %w", err)
@@ -45,7 +45,7 @@ func (e *Execution) Submit() error {
     job := types.Job{
         ID:        uuid.New().String(),
         Worker:    name,
-        Args:      argsJSON,  // Raw JSON bytes
+        Args:      json.RawMessage(argsJSON),
         CreatedAt: time.Now().UTC(),
     }
 

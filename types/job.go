@@ -1,14 +1,14 @@
 package types
 
 import (
+    "encoding/json"
     "time"
 )
 
-// Job is the shared type
-// Args is raw JSON bytes - NO unmarshaling!
+// Job is the shared type used across all packages
 type Job struct {
-    ID        string    `json:"id"`
-    Worker    string    `json:"worker"`
-    Args      []byte    `json:"args"`  // Raw JSON bytes
-    CreatedAt time.Time `json:"created_at"`
+    ID        string          `json:"id"`
+    Worker    string          `json:"worker"`
+    Args      json.RawMessage `json:"args"`
+    CreatedAt time.Time       `json:"created_at"`
 }

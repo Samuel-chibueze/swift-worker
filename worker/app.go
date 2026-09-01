@@ -224,6 +224,7 @@ func (a *App) poolLoop() {
             current := active[job.Worker]
             if current >= concurrency {
                 mu.Unlock()
+                fmt.Printf("[PoolLoop] ? Concurrency limit reached, requeuing\n")
                 a.jobsCh <- job
                 continue
             }
@@ -237,6 +238,7 @@ func (a *App) poolLoop() {
                     active[job.Worker]--
                     mu.Unlock()
                     a.wg.Done()
+                    fmt.Printf("[PoolLoop] ? Goroutine finished\n")
                 }()
 
                 var execCtx context.Context
@@ -254,15 +256,15 @@ func (a *App) poolLoop() {
                     }
                 }()
 
-                // ? DIRECT PASS - unmarshal args to []any
+                // Unmarshal args from JSON - this expects a JSON array
                 var args []any
                 if err := json.Unmarshal(job.Args, &args); err != nil {
-                    fmt.Printf("[PoolLoop] ? Unmarshal error: %v\n", err)
+                    fmt.Printf("[PoolLoop] ? Unmarshal error: %v (Args: %s)\n", err, string(job.Args))
                     _ = handler(execCtx)
                     return
                 }
 
-                fmt.Printf("[PoolLoop] ?? Calling handler with args: %+v\n", args)
+                fmt.Printf("[PoolLoop] ?? Calling handler with: %+v\n", args)
                 err := handler(execCtx, args...)
                 if err != nil {
                     fmt.Printf("[PoolLoop] ? Handler error: %v\n", err)
