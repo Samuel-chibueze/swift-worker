@@ -1,277 +1,277 @@
 package worker
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "sync"
-    "time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
 
-    "github.com/Samuel-chibueze/swift-worker/queue/memory"
-    "github.com/Samuel-chibueze/swift-worker/queue/rabbitmq"
-    "github.com/Samuel-chibueze/swift-worker/scheduler"
-    "github.com/Samuel-chibueze/swift-worker/types"
+	"github.com/Samuel-chibueze/swift-worker/queue/memory"
+	"github.com/Samuel-chibueze/swift-worker/queue/rabbitmq"
+	"github.com/Samuel-chibueze/swift-worker/scheduler"
+	"github.com/Samuel-chibueze/swift-worker/types"
 )
 
 type App struct {
-    mu                 sync.RWMutex
-    ctx                context.Context
-    cancel             context.CancelFunc
-    workers            map[string]*Worker
-    Backend            Backend
-    backendURL         string
-    scheduler          *scheduler.Scheduler
-    started            bool
-    stopped            bool
-    wg                 sync.WaitGroup
-    shutdownTimeout    time.Duration
-    jobsCh             chan types.Job
-    defaultTimeout     time.Duration
-    defaultRetries     int
-    defaultConcurrency int
+	mu                 sync.RWMutex
+	ctx                context.Context
+	cancel             context.CancelFunc
+	workers            map[string]*Worker
+	Backend            Backend
+	backendURL         string
+	scheduler          *scheduler.Scheduler
+	started            bool
+	stopped            bool
+	wg                 sync.WaitGroup
+	shutdownTimeout    time.Duration
+	jobsCh             chan types.Job
+	defaultTimeout     time.Duration
+	defaultRetries     int
+	defaultConcurrency int
 }
 
 func New(ctx context.Context, opts ...Option) *App {
-    ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 
-    app := &App{
-        ctx:                ctx,
-        cancel:             cancel,
-        workers:            make(map[string]*Worker),
-        jobsCh:             make(chan types.Job, 100),
-        shutdownTimeout:    30 * time.Second,
-        Backend:            memory.New(ctx),
-        defaultTimeout:     5 * time.Minute,
-        defaultRetries:     3,
-        defaultConcurrency: 1,
-    }
+	app := &App{
+		ctx:                ctx,
+		cancel:             cancel,
+		workers:            make(map[string]*Worker),
+		jobsCh:             make(chan types.Job, 100),
+		shutdownTimeout:    30 * time.Second,
+		Backend:            memory.New(ctx),
+		defaultTimeout:     5 * time.Minute,
+		defaultRetries:     3,
+		defaultConcurrency: 1,
+	}
 
-    for _, opt := range opts {
-        opt(app)
-    }
+	for _, opt := range opts {
+		opt(app)
+	}
 
-    return app
+	return app
 }
 
 func (a *App) Worker(name string, handler interface{}, opts ...WorkerOption) *Worker {
-    a.mu.Lock()
-    defer a.mu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-    h := WrapHandler(handler)
+	h := WrapHandler(handler)
 
-    w := newWorker(name, h, a)
-    w.applyOptions(opts...)
-    a.workers[name] = w
-    return w
+	w := newWorker(name, h, a)
+	w.applyOptions(opts...)
+	a.workers[name] = w
+	return w
 }
 
 func (a *App) Exec(w *Worker) *Execution {
-    return &Execution{
-        app:    a,
-        worker: w,
-    }
+	return &Execution{
+		app:    a,
+		worker: w,
+	}
 }
 
 func (a *App) Queue(name string) *Execution {
-    return &Execution{
-        app:  a,
-        name: name,
-    }
+	return &Execution{
+		app:  a,
+		name: name,
+	}
 }
 
 func (a *App) Schedule(expression string, fn func()) *scheduler.Task {
-    if a.scheduler == nil {
-        a.scheduler = scheduler.New(a.ctx)
-    }
-    return a.scheduler.Schedule(expression, fn)
+	if a.scheduler == nil {
+		a.scheduler = scheduler.New(a.ctx)
+	}
+	return a.scheduler.Schedule(expression, fn)
 }
 
 func (a *App) Start() error {
-    a.mu.Lock()
-    defer a.mu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
-    if a.started {
-        return ErrAlreadyStarted
-    }
+	if a.started {
+		return ErrAlreadyStarted
+	}
 
-    if a.backendURL != "" {
-        backend, err := rabbitmq.New(a.ctx, a.backendURL)
-        if err != nil {
-            return fmt.Errorf("init rabbitmq: %w", err)
-        }
-        a.Backend = backend
-    }
+	if a.backendURL != "" {
+		backend, err := rabbitmq.New(a.ctx, a.backendURL)
+		if err != nil {
+			return fmt.Errorf("init rabbitmq: %w", err)
+		}
+		a.Backend = backend
+	}
 
-    if a.Backend == nil {
-        return ErrNoBackend
-    }
+	if a.Backend == nil {
+		return ErrNoBackend
+	}
 
-    if err := a.Backend.Start(a.ctx, a.jobsCh); err != nil {
-        return fmt.Errorf("start backend: %w", err)
-    }
+	if err := a.Backend.Start(a.ctx, a.jobsCh); err != nil {
+		return fmt.Errorf("start backend: %w", err)
+	}
 
-    a.wg.Add(1)
-    go a.poolLoop()
+	a.wg.Add(1)
+	go a.poolLoop()
 
-    if a.scheduler != nil {
-        a.scheduler.Start()
-    }
+	if a.scheduler != nil {
+		a.scheduler.Start()
+	}
 
-    a.started = true
-    return nil
+	a.started = true
+	return nil
 }
 
 func (a *App) Run() error {
-    if err := a.Start(); err != nil {
-        return err
-    }
+	if err := a.Start(); err != nil {
+		return err
+	}
 
-    <-a.ctx.Done()
+	<-a.ctx.Done()
 
-    shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
-    defer cancel()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
+	defer cancel()
 
-    return a.Shutdown(shutdownCtx)
+	return a.Shutdown(shutdownCtx)
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
-    a.mu.Lock()
-    if a.stopped {
-        a.mu.Unlock()
-        return ErrAlreadyStopped
-    }
-    a.stopped = true
-    a.mu.Unlock()
+	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		return ErrAlreadyStopped
+	}
+	a.stopped = true
+	a.mu.Unlock()
 
-    a.cancel()
+	a.cancel()
 
-    if a.scheduler != nil {
-        a.scheduler.Stop()
-    }
+	if a.scheduler != nil {
+		a.scheduler.Stop()
+	}
 
-    if a.Backend != nil {
-        if err := a.Backend.Close(); err != nil {
-            return fmt.Errorf("close backend: %w", err)
-        }
-    }
+	if a.Backend != nil {
+		if err := a.Backend.Close(); err != nil {
+			return fmt.Errorf("close backend: %w", err)
+		}
+	}
 
-    done := make(chan struct{})
-    go func() {
-        a.wg.Wait()
-        close(done)
-    }()
+	done := make(chan struct{})
+	go func() {
+		a.wg.Wait()
+		close(done)
+	}()
 
-    select {
-    case <-done:
-        return nil
-    case <-ctx.Done():
-        return ctx.Err()
-    }
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *App) Close() error {
-    a.mu.Lock()
-    if a.stopped {
-        a.mu.Unlock()
-        return ErrAlreadyStopped
-    }
-    a.stopped = true
-    a.mu.Unlock()
+	a.mu.Lock()
+	if a.stopped {
+		a.mu.Unlock()
+		return ErrAlreadyStopped
+	}
+	a.stopped = true
+	a.mu.Unlock()
 
-    a.cancel()
+	a.cancel()
 
-    if a.Backend != nil {
-        return a.Backend.Close()
-    }
+	if a.Backend != nil {
+		return a.Backend.Close()
+	}
 
-    return nil
+	return nil
 }
 
 func (a *App) poolLoop() {
-    defer a.wg.Done()
+	defer a.wg.Done()
 
-    active := make(map[string]int)
-    var mu sync.Mutex
+	active := make(map[string]int)
+	var mu sync.Mutex
 
-    for {
-        select {
-        case <-a.ctx.Done():
-            return
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
 
-        case job, ok := <-a.jobsCh:
-            if !ok {
-                return
-            }
+		case job, ok := <-a.jobsCh:
+			if !ok {
+				return
+			}
 
-            fmt.Printf("[PoolLoop] ?? Got job: %s (worker: %s)\n", job.ID, job.Worker)
+			fmt.Printf("[PoolLoop] ?? Got job: %s (worker: %s)\n", job.ID, job.Worker)
 
-            a.mu.RLock()
-            worker, exists := a.workers[job.Worker]
-            a.mu.RUnlock()
+			a.mu.RLock()
+			worker, exists := a.workers[job.Worker]
+			a.mu.RUnlock()
 
-            if !exists {
-                fmt.Printf("[PoolLoop] ? Worker not found: %s\n", job.Worker)
-                continue
-            }
+			if !exists {
+				fmt.Printf("[PoolLoop] ? Worker not found: %s\n", job.Worker)
+				continue
+			}
 
-            worker.mu.RLock()
-            concurrency := worker.Concurrency
-            timeout := worker.Timeout
-            handler := worker.Handler
-            worker.mu.RUnlock()
+			worker.mu.RLock()
+			concurrency := worker.Concurrency
+			timeout := worker.Timeout
+			handler := worker.Handler
+			worker.mu.RUnlock()
 
-            mu.Lock()
-            current := active[job.Worker]
-            if current >= concurrency {
-                mu.Unlock()
-                fmt.Printf("[PoolLoop] ? Concurrency limit reached, requeuing\n")
-                a.jobsCh <- job
-                continue
-            }
-            active[job.Worker] = current + 1
-            mu.Unlock()
+			mu.Lock()
+			current := active[job.Worker]
+			if current >= concurrency {
+				mu.Unlock()
+				fmt.Printf("[PoolLoop] ? Concurrency limit reached, requeuing\n")
+				a.jobsCh <- job
+				continue
+			}
+			active[job.Worker] = current + 1
+			mu.Unlock()
 
-            a.wg.Add(1)
-            go func() {
-                defer func() {
-                    mu.Lock()
-                    active[job.Worker]--
-                    mu.Unlock()
-                    a.wg.Done()
-                    fmt.Printf("[PoolLoop] ? Goroutine finished\n")
-                }()
+			a.wg.Add(1)
+			go func() {
+				defer func() {
+					mu.Lock()
+					active[job.Worker]--
+					mu.Unlock()
+					a.wg.Done()
+					fmt.Printf("[PoolLoop] ? Goroutine finished\n")
+				}()
 
-                var execCtx context.Context
-                var cancel context.CancelFunc
-                if timeout > 0 {
-                    execCtx, cancel = context.WithTimeout(a.ctx, timeout)
-                    defer cancel()
-                } else {
-                    execCtx = a.ctx
-                }
+				var execCtx context.Context
+				var cancel context.CancelFunc
+				if timeout > 0 {
+					execCtx, cancel = context.WithTimeout(a.ctx, timeout)
+					defer cancel()
+				} else {
+					execCtx = a.ctx
+				}
 
-                defer func() {
-                    if r := recover(); r != nil {
-                        fmt.Printf("[PoolLoop] ?? Panic: %v\n", r)
-                    }
-                }()
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Printf("[PoolLoop] ?? Panic: %v\n", r)
+					}
+				}()
 
-                // Unmarshal args from JSON - this expects a JSON array
-                var args []any
-                if err := json.Unmarshal(job.Args, &args); err != nil {
-                    fmt.Printf("[PoolLoop] ? Unmarshal error: %v (Args: %s)\n", err, string(job.Args))
-                    _ = handler(execCtx)
-                    return
-                }
+				// Unmarshal args from JSON - this expects a JSON array
+				var args []any
+				if err := json.Unmarshal(job.Args, &args); err != nil {
+					fmt.Printf("[PoolLoop] ? Unmarshal error: %v (Args: %s)\n", err, string(job.Args))
+					_ = handler(execCtx)
+					return
+				}
 
-                fmt.Printf("[PoolLoop] ?? Calling handler with: %+v\n", args)
-                err := handler(execCtx, args...)
-                if err != nil {
-                    fmt.Printf("[PoolLoop] ? Handler error: %v\n", err)
-                } else {
-                    fmt.Printf("[PoolLoop] ? Handler completed\n")
-                }
-            }()
-        }
-    }
+				fmt.Printf("[PoolLoop] ?? Calling handler with: %+v\n", args)
+				err := handler(execCtx, args...)
+				if err != nil {
+					fmt.Printf("[PoolLoop] ? Handler error: %v\n", err)
+				} else {
+					fmt.Printf("[PoolLoop] ? Handler completed\n")
+				}
+			}()
+		}
+	}
 }
