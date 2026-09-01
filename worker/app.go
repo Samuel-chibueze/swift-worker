@@ -25,7 +25,7 @@ type App struct {
 	stopped            bool
 	wg                 sync.WaitGroup
 	shutdownTimeout    time.Duration
-	jobsCh             chan types.Job
+	jobsCh             chan types.BackendJob
 	defaultTimeout     time.Duration
 	defaultRetries     int
 	defaultConcurrency int
@@ -38,7 +38,7 @@ func New(ctx context.Context, opts ...Option) *App {
 		ctx:                ctx,
 		cancel:             cancel,
 		workers:            make(map[string]*Worker),
-		jobsCh:             make(chan types.Job, 100),
+		jobsCh:             make(chan types.BackendJob, 100),
 		shutdownTimeout:    30 * time.Second,
 		Backend:            memory.New(ctx),
 		defaultTimeout:     5 * time.Minute,
@@ -110,6 +110,7 @@ func (a *App) Start() error {
 		return fmt.Errorf("start backend: %w", err)
 	}
 
+	// Start worker pool loop in background and return immediately
 	a.wg.Add(1)
 	go a.poolLoop()
 
@@ -122,10 +123,12 @@ func (a *App) Start() error {
 }
 
 func (a *App) Run() error {
+	// Start the system (non-blocking)
 	if err := a.Start(); err != nil {
 		return err
 	}
 
+	// Block until context is cancelled
 	<-a.ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
@@ -143,12 +146,14 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.stopped = true
 	a.mu.Unlock()
 
+	// Cancel internal context to stop accepting new jobs and signal goroutines
 	a.cancel()
 
 	if a.scheduler != nil {
 		a.scheduler.Stop()
 	}
 
+	// Close backend (this should stop RabbitMQ consumer)
 	if a.Backend != nil {
 		if err := a.Backend.Close(); err != nil {
 			return fmt.Errorf("close backend: %w", err)
@@ -198,11 +203,12 @@ func (a *App) poolLoop() {
 		case <-a.ctx.Done():
 			return
 
-		case job, ok := <-a.jobsCh:
+		case bjob, ok := <-a.jobsCh:
 			if !ok {
 				return
 			}
 
+			job := bjob.Job
 			fmt.Printf("[PoolLoop] ?? Got job: %s (worker: %s)\n", job.ID, job.Worker)
 
 			a.mu.RLock()
@@ -211,6 +217,10 @@ func (a *App) poolLoop() {
 
 			if !exists {
 				fmt.Printf("[PoolLoop] ? Worker not found: %s\n", job.Worker)
+				// If this came from a broker, reject without requeue
+				if bjob.Nack != nil {
+					_ = bjob.Nack(false)
+				}
 				continue
 			}
 
@@ -218,6 +228,7 @@ func (a *App) poolLoop() {
 			concurrency := worker.Concurrency
 			timeout := worker.Timeout
 			handler := worker.Handler
+			maxRetries := worker.MaxRetries
 			worker.mu.RUnlock()
 
 			mu.Lock()
@@ -225,17 +236,30 @@ func (a *App) poolLoop() {
 			if current >= concurrency {
 				mu.Unlock()
 				fmt.Printf("[PoolLoop] ? Concurrency limit reached, requeuing\n")
-				a.jobsCh <- job
+				// Try to re-enqueue the job so it will be retried later.
+				// For brokers this will publish a new message; for memory backend this will push back.
+				// We attempt to re-enqueue and then Ack/Nack appropriately for broker/backends.
+				if err := a.Backend.Enqueue(a.ctx, job); err != nil {
+					// If we can't re-enqueue, try to Nack with requeue=true if possible
+					if bjob.Nack != nil {
+						_ = bjob.Nack(true)
+					}
+				} else {
+					// We re-enqueued successfully; acknowledge original if we have an ack function
+					if bjob.Ack != nil {
+						_ = bjob.Ack()
+					}
+				}
 				continue
 			}
 			active[job.Worker] = current + 1
 			mu.Unlock()
 
 			a.wg.Add(1)
-			go func() {
+			go func(bj types.BackendJob) {
 				defer func() {
 					mu.Lock()
-					active[job.Worker]--
+					active[bj.Job.Worker]--
 					mu.Unlock()
 					a.wg.Done()
 					fmt.Printf("[PoolLoop] ? Goroutine finished\n")
@@ -256,22 +280,79 @@ func (a *App) poolLoop() {
 					}
 				}()
 
-				// Unmarshal args from JSON - this expects a JSON array
+				// Prepare handler arguments from JSON.
 				var args []any
-				if err := json.Unmarshal(job.Args, &args); err != nil {
-					fmt.Printf("[PoolLoop] ? Unmarshal error: %v (Args: %s)\n", err, string(job.Args))
-					_ = handler(execCtx)
-					return
+				raw := bj.Job.Args
+
+				// Determine JSON kind
+				if len(raw) == 0 || string(raw) == "null" {
+					args = []any{}
+				} else {
+					first := raw[0]
+					if first == '[' {
+						// JSON array -> unmarshal into []any
+						var arr []any
+						if err := json.Unmarshal(raw, &arr); err != nil {
+							fmt.Printf("[PoolLoop] ? Unmarshal array error: %v (Args: %s)\n", err, string(raw))
+							// treat as single raw value fallback
+							var v any
+							_ = json.Unmarshal(raw, &v)
+							args = []any{v}
+						} else {
+							args = arr
+						}
+					} else {
+						// Single JSON value or object -> unmarshal into interface{} and pass as single arg
+						var v any
+						if err := json.Unmarshal(raw, &v); err != nil {
+							fmt.Printf("[PoolLoop] ? Unmarshal single value error: %v (Args: %s)\n", err, string(raw))
+							args = []any{}
+						} else {
+							args = []any{v}
+						}
+					}
 				}
 
 				fmt.Printf("[PoolLoop] ?? Calling handler with: %+v\n", args)
+				start := time.Now()
 				err := handler(execCtx, args...)
+				duration := time.Since(start)
+
 				if err != nil {
-					fmt.Printf("[PoolLoop] ? Handler error: %v\n", err)
+					fmt.Printf("[PoolLoop] ? Handler error: %v (duration: %s)\n", err, duration)
+					// Retry logic
+					if bj.Job.Attempts < maxRetries {
+						// Increment attempts and re-enqueue via backend (publish)
+						newJob := bj.Job
+						newJob.Attempts = newJob.Attempts + 1
+						// Preserve CreatedAt as original or set to now? keep original
+						if enqueueErr := a.Backend.Enqueue(a.ctx, newJob); enqueueErr != nil {
+							fmt.Printf("[PoolLoop] ? Failed to re-enqueue job %s: %v\n", newJob.ID, enqueueErr)
+							// Can't re-enqueue - Nack with requeue=true if possible
+							if bj.Nack != nil {
+								_ = bj.Nack(true)
+							}
+						} else {
+							// Successfully re-enqueued - Ack original to remove it from broker
+							if bj.Ack != nil {
+								_ = bj.Ack()
+							}
+						}
+					} else {
+						// Exceeded retries - reject permanently (Nack without requeue if possible)
+						fmt.Printf("[PoolLoop] ? Job %s permanently failed after %d attempts\n", bj.Job.ID, bj.Job.Attempts)
+						if bj.Nack != nil {
+							_ = bj.Nack(false)
+						}
+					}
 				} else {
-					fmt.Printf("[PoolLoop] ? Handler completed\n")
+					fmt.Printf("[PoolLoop] ? Handler completed (duration: %s)\n", duration)
+					// Success - Ack the message if backend provided ack
+					if bj.Ack != nil {
+						_ = bj.Ack()
+					}
 				}
-			}()
+			}(bjob)
 		}
 	}
 }

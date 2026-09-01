@@ -36,8 +36,14 @@ func (e *Execution) Submit() error {
 		return fmt.Errorf("worker name is empty")
 	}
 
-	// Marshal args to JSON array
-	argsJSON, err := json.Marshal(e.args)
+	// Marshal args to JSON array or value (caller may supply a single value/array/object)
+	var body []byte
+	var err error
+
+	// If the single arg is explicitly provided as a single slice or map and the user intended that,
+	// we still marshal the args slice so Submit(Args([]string{...})) becomes JSON array-of-array,
+	// which is consistent with previous behavior. Most callers call Args(...) with multiple values.
+	body, err = json.Marshal(e.args)
 	if err != nil {
 		return fmt.Errorf("marshal args: %w", err)
 	}
@@ -45,8 +51,9 @@ func (e *Execution) Submit() error {
 	job := types.Job{
 		ID:        uuid.New().String(),
 		Worker:    name,
-		Args:      json.RawMessage(argsJSON),
+		Args:      json.RawMessage(body),
 		CreatedAt: time.Now().UTC(),
+		Attempts:  0,
 	}
 
 	if e.app.Backend == nil {

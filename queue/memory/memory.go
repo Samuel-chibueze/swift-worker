@@ -42,13 +42,13 @@ func (b *Backend) Enqueue(ctx context.Context, job types.Job) error {
 	return nil
 }
 
-func (b *Backend) Start(ctx context.Context, jobs chan<- types.Job) error {
+func (b *Backend) Start(ctx context.Context, jobs chan<- types.BackendJob) error {
 	b.wg.Add(1)
 	go b.consumeLoop(ctx, jobs)
 	return nil
 }
 
-func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- types.Job) {
+func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- types.BackendJob) {
 	defer b.wg.Done()
 
 	for {
@@ -67,7 +67,11 @@ func (b *Backend) consumeLoop(ctx context.Context, jobs chan<- types.Job) {
 		b.mu.Unlock()
 
 		select {
-		case jobs <- job:
+		case jobs <- types.BackendJob{
+			Job:  job,
+			Ack:  func() error { return nil },
+			Nack: func(requeue bool) error { return nil },
+		}:
 		case <-ctx.Done():
 			return
 		}

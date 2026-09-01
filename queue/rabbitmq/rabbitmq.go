@@ -128,7 +128,7 @@ func (b *Backend) Enqueue(ctx context.Context, job types.Job) error {
 	return nil
 }
 
-func (b *Backend) Start(ctx context.Context, jobs chan<- types.Job) error {
+func (b *Backend) Start(ctx context.Context, jobs chan<- types.BackendJob) error {
 	b.mu.Lock()
 	if b.ch == nil {
 		b.mu.Unlock()
@@ -141,7 +141,7 @@ func (b *Backend) Start(ctx context.Context, jobs chan<- types.Job) error {
 	deliveries, err := b.ch.Consume(
 		b.queueName,
 		"swift-consumer",
-		false,
+		false, // manual ack - we will ack only after successful execution
 		false,
 		false,
 		false,
@@ -158,7 +158,7 @@ func (b *Backend) Start(ctx context.Context, jobs chan<- types.Job) error {
 	return nil
 }
 
-func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delivery, jobs chan<- types.Job) {
+func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delivery, jobs chan<- types.BackendJob) {
 	defer b.wg.Done()
 
 	fmt.Printf("[RabbitMQ] ?? Consume loop running\n")
@@ -180,6 +180,7 @@ func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delive
 			var job types.Job
 			if err := json.Unmarshal(delivery.Body, &job); err != nil {
 				fmt.Printf("[RabbitMQ] ? Failed to unmarshal: %v\n", err)
+				// Malformed message - reject without requeue
 				_ = delivery.Nack(false, false)
 				continue
 			}
@@ -187,15 +188,24 @@ func (b *Backend) consumeLoop(ctx context.Context, deliveries <-chan amqp.Delive
 			fmt.Printf("[RabbitMQ] ?? Forwarding job: %s (worker: %s)\n", job.ID, job.Worker)
 			fmt.Printf("[RabbitMQ] ?? Args: %s\n", string(job.Args))
 
+			// Create backend job that contains ack/nack functions tied to this delivery.
+			bj := types.BackendJob{
+				Job: job,
+				Ack: func() error {
+					return delivery.Ack(false)
+				},
+				Nack: func(requeue bool) error {
+					return delivery.Nack(false, requeue)
+				},
+			}
+
 			select {
-			case jobs <- job:
+			case jobs <- bj:
 				fmt.Printf("[RabbitMQ] ? Job %s forwarded\n", job.ID)
-				// V1: ACK immediately - V2: move to after handler
-				if err := delivery.Ack(false); err != nil {
-					fmt.Printf("[RabbitMQ] ? Failed to ACK: %v\n", err)
-				}
+			// Do NOT ACK here. Ack/Nack will be done by worker pool after execution.
 			case <-ctx.Done():
 				fmt.Printf("[RabbitMQ] ? Context cancelled, not forwarding\n")
+				// We couldn't forward - requeue the message
 				_ = delivery.Nack(false, true)
 				return
 			}
