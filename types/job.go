@@ -4,11 +4,11 @@ import (
     "time"
 )
 
-// Job is the shared type used across all packages
-// Args is ANY type - no marshaling!
+// Job is the shared type
+// Args is raw JSON bytes - NO unmarshaling!
 type Job struct {
     ID        string    `json:"id"`
     Worker    string    `json:"worker"`
-    Args      any       `json:"args"`  // ANY type - no marshaling!
+    Args      []byte    `json:"args"`  // Raw JSON bytes
     CreatedAt time.Time `json:"created_at"`
 }

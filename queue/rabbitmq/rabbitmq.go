@@ -102,7 +102,7 @@ func (b *Backend) Enqueue(ctx context.Context, job types.Job) error {
         return fmt.Errorf("channel is closed")
     }
 
-    // Marshal the ENTIRE job (including args) to JSON
+    // Marshal the ENTIRE job to JSON
     body, err := json.Marshal(job)
     if err != nil {
         return fmt.Errorf("marshal job: %w", err)

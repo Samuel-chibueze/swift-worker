@@ -1,6 +1,7 @@
 package worker
 
 import (
+    "encoding/json"
     "fmt"
     "time"
 
@@ -35,11 +36,16 @@ func (e *Execution) Submit() error {
         return fmt.Errorf("worker name is empty")
     }
 
-    // NO marshaling - pass args as-is!
+    // Marshal args to JSON ONCE here
+    argsJSON, err := json.Marshal(e.args)
+    if err != nil {
+        return fmt.Errorf("marshal args: %w", err)
+    }
+
     job := types.Job{
         ID:        uuid.New().String(),
         Worker:    name,
-        Args:      e.args,  // Pass through raw
+        Args:      argsJSON,  // Raw JSON bytes
         CreatedAt: time.Now().UTC(),
     }
 
