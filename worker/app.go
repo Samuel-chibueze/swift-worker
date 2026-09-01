@@ -2,7 +2,6 @@ package worker
 
 import (
     "context"
-    "encoding/json"
     "fmt"
     "sync"
     "time"
@@ -50,7 +49,6 @@ func New(ctx context.Context, opts ...Option) *App {
         opt(app)
     }
 
-    fmt.Println("[App] ? New() created")
     return app
 }
 
@@ -63,7 +61,6 @@ func (a *App) Worker(name string, handler interface{}, opts ...WorkerOption) *Wo
     w := newWorker(name, h, a)
     w.applyOptions(opts...)
     a.workers[name] = w
-    fmt.Printf("[App] ? Worker registered: %s\n", name)
     return w
 }
 
@@ -89,66 +86,46 @@ func (a *App) Schedule(expression string, fn func()) *scheduler.Task {
 }
 
 func (a *App) Start() error {
-    fmt.Println("[App] ?? Start() called")
-
     a.mu.Lock()
     defer a.mu.Unlock()
 
     if a.started {
-        fmt.Println("[App] ?? Already started")
         return ErrAlreadyStarted
     }
 
-    fmt.Printf("[App] ?? backendURL: '%s'\n", a.backendURL)
-
     if a.backendURL != "" {
-        fmt.Printf("[App] ?? Creating RabbitMQ backend for: %s\n", a.backendURL)
         backend, err := rabbitmq.New(a.ctx, a.backendURL)
         if err != nil {
-            fmt.Printf("[App] ? RabbitMQ creation failed: %v\n", err)
             return fmt.Errorf("init rabbitmq: %w", err)
         }
         a.Backend = backend
-        fmt.Println("[App] ? RabbitMQ backend created")
     }
 
     if a.Backend == nil {
-        fmt.Println("[App] ? No backend configured")
         return ErrNoBackend
     }
 
-    fmt.Printf("[App] ?? Backend type: %T\n", a.Backend)
-
-    fmt.Println("[App] ?? Starting backend consumer...")
     if err := a.Backend.Start(a.ctx, a.jobsCh); err != nil {
-        fmt.Printf("[App] ? Backend Start failed: %v\n", err)
         return fmt.Errorf("start backend: %w", err)
     }
-    fmt.Println("[App] ? Backend consumer started")
 
-    fmt.Println("[App] ?? Starting pool loop...")
     a.wg.Add(1)
     go a.poolLoop()
-    fmt.Println("[App] ? Pool loop started (goroutine launched)")
 
     if a.scheduler != nil {
         a.scheduler.Start()
     }
 
     a.started = true
-    fmt.Println("[App] ? Start() completed successfully")
     return nil
 }
 
 func (a *App) Run() error {
-    fmt.Println("[App] ?? Run() called")
     if err := a.Start(); err != nil {
         return err
     }
 
-    fmt.Println("[App] ? Waiting for context cancellation...")
     <-a.ctx.Done()
-    fmt.Println("[App] ?? Context cancelled")
 
     shutdownCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
     defer cancel()
@@ -212,35 +189,26 @@ func (a *App) Close() error {
 func (a *App) poolLoop() {
     defer a.wg.Done()
 
-    fmt.Println("[PoolLoop] ?????? STARTED - waiting for jobs on channel ??????")
-
     active := make(map[string]int)
     var mu sync.Mutex
 
     for {
         select {
         case <-a.ctx.Done():
-            fmt.Println("[PoolLoop] ? Context cancelled, exiting")
             return
 
         case job, ok := <-a.jobsCh:
             if !ok {
-                fmt.Println("[PoolLoop] ? jobsCh closed, exiting")
                 return
             }
-
-            fmt.Printf("[PoolLoop] ?????? GOT JOB: %s for worker: %s ??????\n", job.ID, job.Worker)
 
             a.mu.RLock()
             worker, exists := a.workers[job.Worker]
             a.mu.RUnlock()
 
             if !exists {
-                fmt.Printf("[PoolLoop] ? Worker not found: %s\n", job.Worker)
                 continue
             }
-
-            fmt.Printf("[PoolLoop] ? Found worker: %s\n", worker.Name)
 
             worker.mu.RLock()
             concurrency := worker.Concurrency
@@ -252,17 +220,11 @@ func (a *App) poolLoop() {
             current := active[job.Worker]
             if current >= concurrency {
                 mu.Unlock()
-                fmt.Printf("[PoolLoop] ? Concurrency limit reached, requeuing\n")
-                select {
-                case a.jobsCh <- job:
-                default:
-                }
+                a.jobsCh <- job
                 continue
             }
             active[job.Worker] = current + 1
             mu.Unlock()
-
-            fmt.Printf("[PoolLoop] ?? Starting goroutine (active: %d/%d)\n", current+1, concurrency)
 
             a.wg.Add(1)
             go func() {
@@ -271,7 +233,6 @@ func (a *App) poolLoop() {
                     active[job.Worker]--
                     mu.Unlock()
                     a.wg.Done()
-                    fmt.Printf("[PoolLoop] ? Goroutine finished\n")
                 }()
 
                 var execCtx context.Context
@@ -285,24 +246,29 @@ func (a *App) poolLoop() {
 
                 defer func() {
                     if r := recover(); r != nil {
-                        fmt.Printf("[PoolLoop] ?? Panic: %v\n", r)
+                        // Panic recovered
                     }
                 }()
 
+                // Args is already any - pass directly!
                 var args []any
-                if err := json.Unmarshal(job.Args, &args); err != nil {
-                    fmt.Printf("[PoolLoop] ? Unmarshal error: %v\n", err)
+                if job.Args == nil {
+                    // No args
                     _ = handler(execCtx)
                     return
                 }
 
-                fmt.Printf("[PoolLoop] ?????? Calling handler with: %+v ??????\n", args)
-                err := handler(execCtx, args...)
-                if err != nil {
-                    fmt.Printf("[PoolLoop] ? Handler error: %v\n", err)
-                } else {
-                    fmt.Printf("[PoolLoop] ??? Handler completed successfully ???\n")
+                // If args is already a slice, use it
+                switch v := job.Args.(type) {
+                case []any:
+                    args = v
+                default:
+                    // Single argument or other type - wrap it
+                    args = []any{job.Args}
                 }
+
+                fmt.Printf("[PoolLoop] ?? Calling handler with args: %+v\n", args)
+                _ = handler(execCtx, args...)
             }()
         }
     }
